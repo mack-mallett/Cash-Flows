@@ -1,0 +1,5 @@
+analyzer: 'char_wb'
+ngram_range: [5,6]
+min_df: 1
+max_features: 5000
+sublinear_tf: True
