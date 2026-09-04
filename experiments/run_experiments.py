@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 #Data Processing
-from custom_objects.pipelines import preprocessor
+from custom_pipeline.pipelines import preprocessor
 from sklearn.model_selection import train_test_split, StratifiedKFold
 #Classifiers
 from sklearn.linear_model import SGDClassifier
@@ -15,7 +15,7 @@ from sklearn.neural_network import MLPClassifier
 import xgboost as xgb
 #Pipelines
 # from experiments.custom_objects.inc_logistic_clf import IncramentalSGDClassifier
-from custom_objects.incremental_learning_pipelines import IncrementalXGBoostClassifier, IncrementalSklearnClassifier
+from custom_pipeline.incremental_learning_pipelines import IncrementalXGBoostClassifier, IncrementalSklearnClassifier
 
 #Data Import
 user_data = Path.cwd() / "userData" / "Mack"
