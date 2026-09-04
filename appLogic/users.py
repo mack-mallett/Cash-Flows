@@ -36,10 +36,11 @@ class User ():
         self.username = username
         # generated variables below
         self.userData = Path.cwd() / 'userData' / self.username
-        self.accounts = pd.read_csv(self.userData / 'Accounts.csv')
+        #Removed. Don't think I need to track this information
+        # self.accounts = pd.read_csv(self.userData / 'Accounts.csv')
         self.budget = pd.read_csv(self.userData / 'Budget.csv')
-        self.statements = Path.cwd() / 'Statements'
-        self.gl = pd.read_csv(self.userData / 'GL.csv')
+        self.statements = self.userData / 'Statements'
+        self.gl = pd.read_csv(self.userData / 'GL_2lvl.csv')
         self.gl = self.gl.loc[:, ~self.gl.columns.str.startswith('Unnamed')]
         self.gl['Location'] = self.gl['Location'].astype(str).str.strip()
         self.gl['Source'] = self.gl['Source'].astype(str).str.strip()
@@ -71,7 +72,7 @@ class User ():
             df['Tag1'] = None
             df['E_Transfer'] = None
             df['Source'] = str(folder.stem)
-            df = df[['Date', 'Location', 'Tag1', 'Credit', 'Debit','Balance', 'Source', 'E_Transfer']]
+            df = df[['Date', 'Location', 'Tag1', 'Tag2', 'Credit', 'Debit','Balance', 'Source', 'E_Transfer']]
             return df
         for folder in self.statements.iterdir():
             if folder.is_dir() == True:#prevent non-folders being read
@@ -93,7 +94,7 @@ class User ():
         return newDatadf
         
     def updateAccounts(self):
-        """Combine GL with list of new inputs and write to storage."""
+        """Call the catogirizer to predict new purchases. Require user to validate and correct. Save changes to GL and log performance."""
         newData = self.read_inputs()
         # newData = newData.merge(
         #     self.gl[['Date', 'Location', 'Credit', 'Debit', 'Balance', 'Source']],

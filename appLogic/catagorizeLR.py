@@ -49,7 +49,7 @@ class logregSettings(genericSettings):
     use_legacy_attributes:bool
 
 class Categorizer():
-    """Comes with hardcoded settings"""
+    """Settings defined in .yaml files Settings..."""
     def __init__(self):
         self.tfidfSettings = tfidfSettings.load_from_yaml(settingsFolder / "tfidf.yaml")
         self.KFoldSettings = KFoldSettings.load_from_yaml(settingsFolder / "kFold.yaml")
@@ -175,8 +175,8 @@ class Categorizer():
             plt.show()
 
 
-    def fit_and_evaluate(self, gl, save_plot_path = None):
-        gl_safe = gl
+    def fit_and_evaluate(self, gl:pd.DataFrame, save_plot_path:Path | None = None):
+        gl_safe = gl.copy()
         glPreprocessed = self._preprocess(
             gl_safe, 
             is_training=True
