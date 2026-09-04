@@ -219,6 +219,7 @@ __marimo__/
 
 # Data
 .csv
+.png
 
 #MacBook Stuff
 .DS_Store
