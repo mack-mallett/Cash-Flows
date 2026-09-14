@@ -45,7 +45,6 @@ df, fig = mlp_classifier.accuracy_report(next_batch_X=subsequent_X_batches[0], n
 for i in range(len(subsequent_y_batches)-1):
     mlp_classifier.train_subsequent_batches(X=subsequent_X_batches[i], y=subsequent_y_batches[i])
     df, fig = mlp_classifier.accuracy_report(next_batch_X=subsequent_X_batches[i+1], next_batch_y=subsequent_y_batches[i+1])
-
 ```
 """
 #General
@@ -61,10 +60,11 @@ from skpartial.pipeline import (
     PartialPipeline,
     make_partial_pipeline,
 )
-from custom_objects.partial_column_transformer import PartialColumnTransformer
+from .partial_column_transformer import PartialColumnTransformer
+import copy
 #Classifiers
-# from sklearn.linear_model import SGDClassifier
 import xgboost as xgb
+from sklearn.cluster import MiniBatchKMeans
 #Reporting
 from sklearn.metrics import classification_report
 import matplotlib.pyplot as plt
@@ -168,6 +168,7 @@ class IncrementalXGBoostClassifier():
                 dtrain=dtrain_init,
                 num_boost_round=n_trees
             )
+            self.baseline_clf = copy.deepcopy(self.booster)
             self.fitted = True
 
     def train_subsequent_batches(self, X, y):
@@ -192,14 +193,19 @@ class IncrementalXGBoostClassifier():
             xgb_model=self.booster 
         )
 
-    def accuracy_report(self, next_batch_X, next_batch_y):
+    def accuracy_report(self, next_batch_X, next_batch_y, incremental:bool=True):
         #format next_batch_X
         next_batch_X_trans = self._format_X(X=next_batch_X)
         #prediction. From XGBoost Documentation: "To have cached results for incremental prediction, please use the xgboost.Booster.predict() method instead."
         dtest = xgb.DMatrix(next_batch_X_trans)
-        y_pred = self.booster.predict(dtest)
-        if len(y_pred.shape) > 1 and y_pred.shape[1] > 1:
-            y_pred = np.argmax(y_pred, axis=1)
+
+        if incremental:
+            y_prob = self.booster.predict(dtest)
+        else:
+            y_prob = self.baseline_clf.predict(dtest)
+
+        if len(y_prob.shape) > 1 and y_prob.shape[1] > 1:
+            y_pred = np.argmax(y_prob, axis=1)
         #get_categories_present_in_this_batch
         next_batch_y_encoded = self.label_encoder.transform(next_batch_y.map(self.user_map))
         present_idx = np.unique(np.concatenate([next_batch_y_encoded, y_pred]))
@@ -216,6 +222,7 @@ class IncrementalXGBoostClassifier():
                 zero_division=np.nan #type:ignore #Pylance issue
             )
         )
+
         #confusion_matrix
         fig, ax = plt.subplots(figsize=(10, 10))
 
@@ -313,18 +320,27 @@ class IncrementalSklearnClassifier():
         self.grid_CV.fit(self.initial_X, self.initial_y_encoded)
         self.pipe = self.grid_CV.best_estimator_
         #add extra categories
-        self._add_dummy_cats()
+        if not isinstance(self.clf, MiniBatchKMeans):
+            self._add_dummy_cats()
+        self.baseline_clf = copy.deepcopy(self.pipe)
         self.fitted = True
 
     def train_subsequent_batches(self, X, y):
         if not self.fitted:
             raise RuntimeError("Initial Classifier has not been fit!")
         next_batch_y_encoded = self.label_encoder.transform(y.map(self.user_map))
-        self.pipe.partial_fit(X, next_batch_y_encoded, self.label_encoder.classes_)
+        if not isinstance(self.clf, MiniBatchKMeans):
+            self.pipe.partial_fit(X, next_batch_y_encoded, self.label_encoder.classes_)
+        else:
+            self.pipe.partial_fit(X, next_batch_y_encoded)
 
-    def accuracy_report(self, next_batch_X, next_batch_y):
+    def accuracy_report(self, next_batch_X, next_batch_y, incremental:bool=True):
         #prediction
-        y_pred = self.pipe.predict(next_batch_X)
+        if incremental:
+            y_pred = self.pipe.predict(next_batch_X)
+        else:
+            y_pred = self.baseline_clf.predict(next_batch_X)
+        
         #get_categories_present_in_this_batch
         next_batch_y_encoded = self.label_encoder.transform(next_batch_y.map(self.user_map))
         present_idx = np.unique(np.concatenate([next_batch_y_encoded, y_pred]))
@@ -341,6 +357,7 @@ class IncrementalSklearnClassifier():
                 zero_division=np.nan #type:ignore #Pylance issue
             )
         )
+
         #confusion_matrix
         fig, ax = plt.subplots(figsize=(10, 10))
 

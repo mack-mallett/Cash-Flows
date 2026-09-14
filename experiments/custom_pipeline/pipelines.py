@@ -5,12 +5,12 @@ Contains a wrapper of FunctionTransformer with partial_fit(), satisfying Partial
 #Basics
 import numpy as np
 #Transformers
-from custom_objects.custom_transformers import CurrencyBasics, DateParsing, YearCycle, MonthCycle, Log1pTransformer
+from .custom_transformers import CurrencyBasics, DateParsing, YearCycle, MonthCycle, Log1pTransformer
 from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.feature_extraction.text import HashingVectorizer
 #Pipelines
 # from sklearn.compose import ColumnTransformer
-from custom_objects.partial_column_transformer import PartialColumnTransformer
+from .partial_column_transformer import PartialColumnTransformer
 # from sklearn.pipeline import Pipeline
 from skpartial.pipeline import (
     PartialPipeline,
@@ -32,7 +32,8 @@ currency_pipeline = PartialPipeline([
     ('log1p', Log1pTransformer()),
     ('standard_normalization', StandardScaler())
 ])
-
+#I could try adding Incremental PCA here as it has a .partial_fit() method
+#One thing I'm worried about there is that currently unused tokens will be eliminated in initial training
 pos_pipeline = PartialPipeline([
     ('flatten', PartialFunctionTransformer(lambda x: np.asarray(x).ravel(), feature_names_out='one-to-one')),
     ('hash_POS_ID', HashingVectorizer(
