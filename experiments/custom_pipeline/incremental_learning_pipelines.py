@@ -62,6 +62,7 @@ from skpartial.pipeline import (
 )
 from .partial_column_transformer import PartialColumnTransformer
 import copy
+from sklearn.base import clone
 #Classifiers
 import xgboost as xgb
 from sklearn.cluster import MiniBatchKMeans
@@ -134,42 +135,47 @@ class IncrementalXGBoostClassifier():
         self.preprocessor_pipe.partial_fit(X=X)
         return X_trans
 
+    def param_tune_CV(self):
+        """
+        Train XGBoost on an initial dataset. Hyperparameter tuning via GridSearchCV. Booster is set to have dummy labels, giving room for users to add new labels via user_lables.
+        """
+        #Encode the category labels, with lots of headroom for new labels
+        self._prep_labels()
+        total_classes = len(self.base_labels)
+        
+        # Fit and transform the initial dataset. Use Monkey Patch to overwrite the is_fitted parameter of the underlying Pipeline object
+        self.initial_X_encoded = self.preprocessor_pipe.fit_transform(X=self.initial_X)
+        self.preprocessor_pipe.__sklearn_is_fitted__ = lambda: True
+
+        # Find the best hyperparameters using sklearn wrapper
+        self.grid_CV.fit(self.initial_X_encoded, self.initial_y_encoded)
+        best_estimator = self.grid_CV.best_estimator_
+
+        #Extract the best hyperparameters. Force the num_class to match the base_labels
+        self.best_params_ = best_estimator.get_xgb_params()
+        self.best_params_['num_class'] = total_classes
+        # self.xgb_params['objective'] = 'multi:softprob' # Ensure it expects probabilities for multi-class
+        
+        # Extract how many trees GridSearchCV decided on (defaults to 100 if missing)
+        self.n_trees = getattr(best_estimator, 'n_estimators', 100)
+        if self.n_trees is None:
+            self.n_trees = 100
+
     def train_init_batch(self):
-            """
-            Train XGBoost on an initial dataset. Hyperparameter tuning via GridSearchCV. Booster is set to have dummy labels, giving room for users to add new labels via user_lables.
-            """
-            #Encode the category labels, with lots of headroom for new labels
-            self._prep_labels()
-            total_classes = len(self.base_labels)
-            
-            # Fit and transform the initial dataset. Use Monkey Patch to overwrite the is_fitted parameter of the underlying Pipeline object
-            initial_X_encoded = self.preprocessor_pipe.fit_transform(X=self.initial_X)
-            self.preprocessor_pipe.__sklearn_is_fitted__ = lambda: True
+        #reset the preprocessing pipeline
+        self.initial_X_encoded = self.preprocessor_pipe.fit_transform(X=self.initial_X)
+        self.preprocessor_pipe.__sklearn_is_fitted__ = lambda: True
 
-            # Find the best hyperparameters using sklearn wrapper
-            self.grid_CV.fit(initial_X_encoded, self.initial_y_encoded)
-            best_estimator = self.grid_CV.best_estimator_
-
-            #Extract the best hyperparameters. Force the num_class to match the base_labels
-            self.xgb_params = best_estimator.get_xgb_params()
-            self.xgb_params['num_class'] = total_classes
-            # self.xgb_params['objective'] = 'multi:softprob' # Ensure it expects probabilities for multi-class
-            
-            #Now switch out of the sklearn wrapper. Declare a DMatrix.
-            dtrain_init = xgb.DMatrix(initial_X_encoded, label=self.initial_y_encoded)
-            # Extract how many trees GridSearchCV decided on (defaults to 100 if missing)
-            n_trees = getattr(best_estimator, 'n_estimators', 100)
-            if n_trees is None:
-                n_trees = 100
-            print(f"n_trees: {n_trees}")
-            # Train a XGBooster object on the training data. Redundent training is necessary because when GridSearhCV['refit'] = False .best_estimator_ is disabled. This redundency could be removed by finding a substitute for sklearn.
-            self.booster = xgb.train(
-                params=self.xgb_params,
-                dtrain=dtrain_init,
-                num_boost_round=n_trees
-            )
-            self.baseline_clf = copy.deepcopy(self.booster)
-            self.fitted = True
+        #Now switch out of the sklearn wrapper. Declare a DMatrix.
+        dtrain_init = xgb.DMatrix(self.initial_X_encoded, label=self.initial_y_encoded)
+        # Train a XGBooster object on the training data. Redundent training is necessary because when GridSearhCV['refit'] = False .best_estimator_ is disabled. This redundency could be removed by finding a substitute for sklearn.
+        self.booster = xgb.train(
+            params=self.best_params_,
+            dtrain=dtrain_init,
+            num_boost_round=self.n_trees
+        )
+        self.baseline_clf = copy.deepcopy(self.booster)
+        self.fitted = True
 
     def train_subsequent_batches(self, X, y):
         """
@@ -187,7 +193,7 @@ class IncrementalXGBoostClassifier():
 
         # Continue boosting on top of existing trees using the saved parameters
         self.booster = xgb.train(
-            params=self.xgb_params,
+            params=self.best_params_,
             dtrain=dtrain,
             num_boost_round=10,
             xgb_model=self.booster 
@@ -313,15 +319,21 @@ class IncrementalSklearnClassifier():
             # Update internal classes array to match base_labels
             sgd_clf.classes_ = all_classes
 
-    def train_init_batch(self):
+    def param_tune_CV(self):
         #prep_lables
         self._prep_labels()
         #initial_fit
         self.grid_CV.fit(self.initial_X, self.initial_y_encoded)
-        self.pipe = self.grid_CV.best_estimator_
+        self.best_params_ = self.grid_CV.best_params_
+
+    def train_init_batch(self):
         #add extra categories
+        self.pipe = clone(self.grid_CV.best_estimator_)
+        self.pipe.set_params(**self.best_params_)
+        self.pipe.fit(self.initial_X, self.initial_y_encoded)
         if not isinstance(self.clf, MiniBatchKMeans):
             self._add_dummy_cats()
+
         self.baseline_clf = copy.deepcopy(self.pipe)
         self.fitted = True
 
@@ -376,7 +388,3 @@ class IncrementalSklearnClassifier():
         plt.close(fig)
 
         return report.T, fig
-    
-
-
-    

@@ -1,6 +1,6 @@
 """
 In the context of the sklearn stuff 'differences' is the difference between mean model performance. In my case it will be the difference between
-either the static model and the incremental model on test set t or between model_a and model_b on test set t.
+either the static model and the incremental model on test set stats.t or between model_a and model_b on test set stats.t.
 """
 #Boilerplate
 from dataclasses import dataclass, field
@@ -10,24 +10,33 @@ import numpy as np
 import pandas as pd
 #Specific
 from itertools import combinations
-from scipy.stats import t
+from scipy import stats
 from math import factorial
+import statsmodels.api as sm
 # from sklearn.model_selection import StratifiedKFold
 
 @dataclass
 class TestVariables():
     results: pd.DataFrame
+    num_test:int
     # cv: StratifiedKFold
     #post init
     model_scores:pd.DataFrame = field(init=False)
-    num_tests:int = field(init=False)
+    num_batch:int = field(init=False)
 
     def __post_init__(self):
         # self.model_scores = pd.DataFrame(self.results, columns=['accuracy'])#.filter(regex=r"split\d*_test_score")
         self.model_scores = self.results.T
-        self.num_tests = self.model_scores.shape[0] - 1
+        self.num_batch = int(self.model_scores.shape[1] / self.num_test)
 
-def dmtest(model_1_loss:np.typing.NDArray, model_2_loss:np.typing.NDArray, h:int=1):
+def get_mean_var(array:np.typing.NDArray, num_batches:int, num_tests:int):
+    """Calculate the mean and variance(1 degree of freedom) of each batch in a set of repeates batch tests"""
+    grid = array.reshape(num_tests,num_batches)
+    means = grid.mean(axis=0)
+    vars = grid.var(axis=0, ddof=1)
+    return means, vars
+
+def dmtest(model_1_loss:np.typing.NDArray, model_2_loss:np.typing.NDArray, num_batches:int, num_tests:int, h:int=1):
     """Function to calculate the Diebold-Mariano test statistic (1995). Based on a MATLAB Implementation at: https://www.mathworks.com/matlabcentral/fileexchange/33979-diebold-mariano-test-statistic/files/dmtest.m
     From the original:
     Retrieves the Diebold-Mariano test statistic (1995) for the equality of forecast accuracy of two forecasts under general assumptions.
@@ -65,12 +74,24 @@ def dmtest(model_1_loss:np.typing.NDArray, model_2_loss:np.typing.NDArray, h:int
     e1_arr = np.asarray(model_1_loss, dtype=np.float64).ravel()
     e2_arr = np.asarray(model_2_loss, dtype=np.float64).ravel()
     assert e1_arr.size == e2_arr.size, f"Size of e1 ({e1_arr.size} does not equal the size of e2 ({e2_arr.size}))"
-    #Initialize T
-    T = e1_arr.size
+
     #Define the loss differential
     d = e1_arr - e2_arr
-    #Recalculate the variance of the loss differential, taking into account autocorrelation
+    # d_means, d_vars = get_mean_var(array=d, num_batches=num_batches, num_tests=num_tests)
+    # d_star = d_means / (d_vars + 5e-10)
+    # #Initialize T
+    T = int(e1_arr.size / num_tests)
+    # #Recalculate the variance of the loss differential, taking into account autocorrelation
+    # max_lags = max(0, h-1) 
+    # X = np.ones_like(d_star)
+
+    # ols_result = sm.OLS(d_star, X).fit(cov_type='HAC', cov_kwds={'maxlags':max_lags})
+
+    # d_star_mean = float(np.mean(d_star))
+    # hac_std_error = float(ols_result.bse.item())
+    # return d_star_mean, hac_std_error
     d_mean = np.mean(d)
+
     gamma_0 = d.var(ddof=1)
     if h > 1:
         gamma = np.zeros(h-1, dtype=np.float64)
@@ -82,8 +103,8 @@ def dmtest(model_1_loss:np.typing.NDArray, model_2_loss:np.typing.NDArray, h:int
     var_d = max(0.0, float(var_d))
     return d_mean, float(np.sqrt((1/T)*var_d))
 
-def compute_Diebold_Mariano_ttest(num_tests:int, model_1_loss:np.ndarray[Any], model_2_loss:np.ndarray[Any], h:int=1):
-    """Computes right-tailed paired t-test with corrected variance.
+def compute_Diebold_Mariano_ttest(model_1_loss:np.ndarray[Any], model_2_loss:np.ndarray[Any], num_tests:int, num_batches:int,  h:int=1):
+    """Computes right-tailed paired stats.t-test with corrected variance.
 
     Parameters
     ----------
@@ -99,32 +120,34 @@ def compute_Diebold_Mariano_ttest(num_tests:int, model_1_loss:np.ndarray[Any], m
     Returns
     -------
     t_stat : float
-        Variance-corrected t-statistic.
+        Variance-corrected stats.t-statistic.
     p_val : float
         Variance-corrected p-value.
     """
     #these should be fed in as a vector, not as a scaler
-    mean, std = dmtest(model_1_loss=model_1_loss, model_2_loss=model_2_loss, h=h)
+    mean, std = dmtest(model_1_loss=model_1_loss, model_2_loss=model_2_loss, h=h, num_tests=num_tests, num_batches=num_batches)
     if std == 0 or np.isnan(std):
         print(f"std is 0 or NaN for pair")
         t_stat = 0.0
     else:
         t_stat = mean / std
-    p_val = t.sf(np.abs(t_stat), num_tests)  # right-tailed t-test
+    p_val = stats.t.sf(np.abs(t_stat), num_batches)  # right-tailed stats.t-test
     return t_stat, p_val
 
 #need to change the scores to loss
-def pairwise_freq(model_scores:pd.DataFrame, num_tests:int, pairwise_comp_df:pd.DataFrame | None):
+def pairwise_freq(model_scores:pd.DataFrame, pairwise_comp_df:pd.DataFrame | None, num_batches:int, num_tests:int):
     """Null Hypothesis: The two models have equal predictive accuracy"""
-    n_comparisons = factorial(len(model_scores)) / (
-        factorial(2) * factorial(len(model_scores) - 2)
+    #I need to 
+    num_models = len(model_scores)
+    n_comparisons = factorial(num_models) / (
+        factorial(2) * factorial(num_models - 2)
     )
     pairwise_t_test = []
-    for model_i, model_k in combinations(range(len(model_scores)), 2):
+    for model_i, model_k in combinations(range(num_models), 2):
         
         model_i_error = (1 - model_scores.iloc[model_i].to_numpy()) ** 2
         model_k_error = (1 - model_scores.iloc[model_k].to_numpy()) ** 2
-        t_stat, p_val = compute_Diebold_Mariano_ttest(num_tests, model_i_error, model_k_error)
+        t_stat, p_val = compute_Diebold_Mariano_ttest(model_i_error, model_k_error, num_batches=num_batches, num_tests=num_tests)
         p_val *= n_comparisons  # implement Bonferroni correction
         # Bonferroni can output p-values higher than 1
         p_val = 1 if p_val > 1 else p_val
@@ -148,14 +171,15 @@ def pairwise_freq(model_scores:pd.DataFrame, num_tests:int, pairwise_comp_df:pd.
         pairwise_comp_df = pairwise_comp_df.join(pairwise_freq_df)
         return pairwise_comp_df
 
-def pairwise_bayesian(model_scores:pd.DataFrame, rope_interval:list, num_tests:int, h:int, pairwise_comp_df:pd.DataFrame | None):
+def pairwise_bayesian(model_scores:pd.DataFrame, rope_interval:list, num_batches:int, num_tests:int, h:int, pairwise_comp_df:pd.DataFrame | None):
     """Probability that Model A is Worse, Better, or the same (over the ROPE) as model B"""
     pairwise_bayesian = []
     # model_scores = model_scores.T
-    for model_i, model_k in combinations(range(len(model_scores)), 2):
+    num_models = len(model_scores)
+    for model_i, model_k in combinations(range(num_models), 2):
         model_i_error = (1 - model_scores.iloc[model_i].to_numpy()) ** 2
         model_k_error = (1 - model_scores.iloc[model_k].to_numpy()) ** 2
-        mean, std = dmtest(model_1_loss=model_i_error, model_2_loss=model_k_error, h=h)
+        mean, std = dmtest(model_1_loss=model_i_error, model_2_loss=model_k_error, h=h, num_batches=num_batches, num_tests=num_tests)
         #Protect against 0 division errors, which could occur if the error is equal
         if std == 0 or np.isnan(std):
             print(f"std is 0 or NaN for pair {model_scores.index[model_i]} and {model_scores.index[model_k]}")
@@ -163,8 +187,8 @@ def pairwise_bayesian(model_scores:pd.DataFrame, rope_interval:list, num_tests:i
             worse_prob = 1.0 if mean > rope_interval[1] else 0.0
             rope_prob = 1.0 if rope_interval[0] <= mean <= rope_interval[1] else 0.0
         else:
-            t_post = t(
-                num_tests, loc=mean, scale=std) #replace scale with dmtest
+            t_post = stats.t(
+                num_batches, loc=mean, scale=std) #replace scale with dmtest
             better_prob = t_post.cdf(rope_interval[0])
             worse_prob = 1 - t_post.cdf(rope_interval[1])
             rope_prob = t_post.cdf(rope_interval[1]) - t_post.cdf(rope_interval[0])

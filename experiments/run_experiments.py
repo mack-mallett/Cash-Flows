@@ -26,6 +26,7 @@ X = pd.read_csv(
     parse_dates=['Date']
     )
 #Experiment Parameters
+num_tests = 10
 random_state = 0
 n_splits = 8 # 8 is the maximum for this dataset
 how_to_fold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
@@ -63,7 +64,7 @@ logistic_classifier = IncrementalSklearnClassifier(
     classifier_w_partial_fit=SGDClassifier(
         loss='log_loss',
         penalty='l2',
-        random_state=random_state,
+        random_state=None,#random_state,
         max_iter=1000,
         tol=1e-4,
     )
@@ -90,7 +91,7 @@ svm_classifier = IncrementalSklearnClassifier(
     classifier_w_partial_fit=SGDClassifier(
         loss='hinge',
         penalty='l2',
-        random_state=random_state,
+        random_state=None,#random_state,
         max_iter=1000,
         tol=1e-4,
     )
@@ -187,12 +188,13 @@ xgboost_classifier = IncrementalXGBoostClassifier(
         tree_method='hist',
         n_jobs=-1,
         max_depth=3,
-        random_state=random_state
+        random_state=None,#random_state
     )
 )
 
 #Experiment Boilerplate
-classifiers = {'logistic':logistic_classifier, 'svm':svm_classifier, 'xgboost':xgboost_classifier}
+# classifiers = {'logistic':logistic_classifier, 'svm':svm_classifier, 'xgboost':xgboost_classifier}
+classifiers = {'xgboost':xgboost_classifier}
 
 #Experiment Loop
 for key, clf in classifiers.items():
@@ -202,55 +204,62 @@ for key, clf in classifiers.items():
     print(f"Starting tests for {key} at {datetime.now().strftime('%H:%M:%S')}")
     #train inital batch
     print(f"training initial {key} at {datetime.now().strftime('%H:%M:%S')}")
-    clf.train_init_batch()
-
-    #predict results on initial test batch and train batch. Incremental == True because for initial batch, both models are the same
-    print(f"predict initial accuracy for {key} at {datetime.now().strftime('%H:%M:%S')}")
-    initial_test_accuracy, initial_test_confusion_matrix = clf.accuracy_report(next_batch_X=subsequent_X_batches[0], next_batch_y=subsequent_y_batches[0])
-    initial_train_accuracy, initial_train_confusion_matrix = clf.accuracy_report(next_batch_X=X_train_init, next_batch_y=y_train_init)
+    clf.param_tune_CV()
     cv_results = pd.DataFrame(clf.grid_CV.cv_results_)
-
     #Save CV fitting results 
-    cv_results.to_csv(results_dir / f"{key}_batch0_cv_results.csv")
+    cv_results.to_csv(results_dir / f"{key}_cv_results.csv")
+    pd.DataFrame(clf.best_params_, index=[0]).to_csv(results_dir / f"{key}_best_params.csv")
 
-    #Test results are saved twice to allow incremental and baseline streams to be analyzed seperately
-    #Save incremental learning train and test results
-    initial_train_accuracy.to_csv(results_dir / f"{key}_inc_batch0_train_accuracy.csv")
-    initial_train_confusion_matrix.savefig(results_dir / f"{key}_inc_batch0_train_conf_matrix.png")
-    initial_test_accuracy.to_csv(results_dir / f"{key}_inc_batch0_test_accuracy.csv")
-    initial_test_confusion_matrix.savefig(results_dir / f"{key}_inc_batch0_test_conf_matrix.png")
+    for test in range(num_tests):
 
-    #Save baseline model test results
-    initial_test_accuracy.to_csv(results_dir / f"{key}_base_batch0_test_accuracy.csv")
-    initial_test_confusion_matrix.savefig(results_dir / f"{key}_base_batch0_test_conf_matrix.png")
+        clf.train_init_batch()
 
-    
-    #repeat prcess for subsequent batches
-    for i, (X_b, y_b) in enumerate(zip(subsequent_X_batches, subsequent_y_batches), start=0):
-        batch_n = i+1
-        total_batches = len(subsequent_y_batches)
-        print(f"training batch {batch_n}/{total_batches} for {key} at {datetime.now().strftime('%H:%M:%S')}")
 
-        if i + 1 < len(subsequent_X_batches):
-            #train on an incoming batch
-            clf.train_subsequent_batches(X=X_b, y=y_b)
-            #evaluate training error for incremental model
-            sub_train_accuracy, sub_train_confusion_matrix = clf.accuracy_report(next_batch_X=X_b, next_batch_y=y_b)
 
-            #Save results
-            sub_train_accuracy.to_csv(results_dir / f"{key}_inc_batch{batch_n}_train_accuracy.csv")
-            sub_train_confusion_matrix.savefig(results_dir / f"{key}_inc_batch{batch_n}_train_conf_matrix.png")
-            #record test results
-            #test incremental model
-            sub_test_accuracy, sub_test_confusion_matrix = clf.accuracy_report(next_batch_X=subsequent_X_batches[i+1], next_batch_y=subsequent_y_batches[i+1])
+        #predict results on initial test batch and train batch. Incremental == True because for initial batch, both models are the same
+        print(f"test {test}: predict initial accuracy for {key} at {datetime.now().strftime('%H:%M:%S')}")
+        initial_test_accuracy, initial_test_confusion_matrix = clf.accuracy_report(next_batch_X=subsequent_X_batches[0], next_batch_y=subsequent_y_batches[0])
+        initial_train_accuracy, initial_train_confusion_matrix = clf.accuracy_report(next_batch_X=X_train_init, next_batch_y=y_train_init)
 
-            #Save incremental results
-            sub_test_accuracy.to_csv(results_dir / f"{key}_inc_batch{batch_n}_test_accuracy.csv")
-            sub_test_confusion_matrix.savefig(results_dir / f"{key}_inc_batch{batch_n}_test_conf_matrix.png")
 
-            #test baseline model
-            base_test_accuracy, base_test_confusion_matrix = clf.accuracy_report(next_batch_X=subsequent_X_batches[i+1], next_batch_y=subsequent_y_batches[i+1], incremental=False)
+        #Test results are saved twice to allow incremental and baseline streams to be analyzed seperately
+        #Save incremental learning train and test results
+        initial_train_accuracy.to_csv(results_dir / f"{key}_inc_test{test}_batch0_train_accuracy.csv")
+        initial_train_confusion_matrix.savefig(results_dir / f"{key}_inc_test{test}_batch0_train_conf_matrix.png")
+        initial_test_accuracy.to_csv(results_dir / f"{key}_inc_test{test}_batch0_test_accuracy.csv")
+        initial_test_confusion_matrix.savefig(results_dir / f"{key}_inc_test{test}_batch0_test_conf_matrix.png")
 
-            #Save baseline results
-            base_test_accuracy.to_csv(results_dir / f"{key}_base_batch{batch_n}_test_accuracy.csv")
-            base_test_confusion_matrix.savefig(results_dir / f"{key}_base_batch{batch_n}_test_conf_matrix.png")
+        #Save baseline model test results
+        initial_test_accuracy.to_csv(results_dir / f"{key}_base_test{test}_batch0_test_accuracy.csv")
+        initial_test_confusion_matrix.savefig(results_dir / f"{key}_base_test{test}_batch0_test_conf_matrix.png")
+
+        
+        #repeat prcess for subsequent batches
+        for i, (X_b, y_b) in enumerate(zip(subsequent_X_batches, subsequent_y_batches), start=0):
+            batch_n = i+1
+            total_batches = len(subsequent_y_batches)
+            print(f"test {test}: training batch {batch_n}/{total_batches} for {key} at {datetime.now().strftime('%H:%M:%S')}")
+
+            if i + 1 < len(subsequent_X_batches):
+                #train on an incoming batch
+                clf.train_subsequent_batches(X=X_b, y=y_b)
+                #evaluate training error for incremental model
+                sub_train_accuracy, sub_train_confusion_matrix = clf.accuracy_report(next_batch_X=X_b, next_batch_y=y_b)
+
+                #Save results
+                sub_train_accuracy.to_csv(results_dir / f"{key}_inc_test{test}_batch{batch_n}_train_accuracy.csv")
+                sub_train_confusion_matrix.savefig(results_dir / f"{key}_inc_test{test}_batch{batch_n}_train_conf_matrix.png")
+                #record test results
+                #test incremental model
+                sub_test_accuracy, sub_test_confusion_matrix = clf.accuracy_report(next_batch_X=subsequent_X_batches[i+1], next_batch_y=subsequent_y_batches[i+1])
+
+                #Save incremental results
+                sub_test_accuracy.to_csv(results_dir / f"{key}_inc_test{test}_batch{batch_n}_test_accuracy.csv")
+                sub_test_confusion_matrix.savefig(results_dir / f"{key}_inc_test{test}_batch{batch_n}_test_conf_matrix.png")
+
+                #test baseline model
+                base_test_accuracy, base_test_confusion_matrix = clf.accuracy_report(next_batch_X=subsequent_X_batches[i+1], next_batch_y=subsequent_y_batches[i+1], incremental=False)
+
+                #Save baseline results
+                base_test_accuracy.to_csv(results_dir / f"{key}_base_test{test}_batch{batch_n}_test_accuracy.csv")
+                base_test_confusion_matrix.savefig(results_dir / f"{key}_base_test{test}_batch{batch_n}_test_conf_matrix.png")
