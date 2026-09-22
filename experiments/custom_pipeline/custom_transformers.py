@@ -13,43 +13,6 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.estimator_checks import check_estimator
 from sklearn.utils.validation import validate_data, check_is_fitted  # pyright: ignore[reportAttributeAccessIssue]
 
-# class FactorizeLabels(TransformerMixin, BaseEstimator):
-#     def __init__(self) -> None:
-#         super().__init__()
-
-#     def fit(self, X, y = None):
-#         """Basic validation, for API convention."""
-#         X = validate_data(self, X, accept_sparse=False)
-#         self.categories_ = []
-#         for col in range(X.shape[1]):
-#             _, uniques = pd.factorize(X[:, col])
-#             self.categories_.append(uniques)
-#         self.n_features_in_ = X.shape[1]
-#         return self
-    
-#     def partial_fit(self, X, y=None, **kwargs):
-#         """Allows compatibility with skpartial by calling fit on incoming batches."""
-#         return self.fit(X, y)
-
-#     def transform(self, X):
-#         """Factorize Budget Labels. TODO: save label names somewhere."""
-#         X = validate_data(self, X, accept_sparse=False, reset=False)
-#         check_is_fitted(self)
-#         X_out = np.empty(X.shape, dtype=int)
-#         for col in range(X.shape[1]):
-#             # X_mod, _ = pd.factorize(X[:, col])
-#             cat = pd.Categorical(X[:, col], categories=self.categories_[col])
-#             X_out[:,col] = cat.codes
-#         return X_out
-
-#     def get_feature_names_out(self, input_features=None):
-#       check_is_fitted(self)
-#       if input_features is None:
-#         # Fallback to feature indices matching fitted input shape
-#         return np.array(
-#             [f'x{i}' for i in range(self.n_features_in_)], dtype=object
-#         )
-#       return np.asarray(input_features, dtype=object)
 
 class CurrencyBasics(TransformerMixin, BaseEstimator):
     def __init__(self) -> None:
@@ -81,131 +44,174 @@ class CurrencyBasics(TransformerMixin, BaseEstimator):
             [f'x{i}' for i in range(self.n_features_in_)], dtype=object
         )
       return np.asarray(input_features, dtype=object)
-
-class DateParsing(TransformerMixin, BaseEstimator):
-    def __init__(self) -> None:
-        super().__init__()
-
-    def __sklearn_tags__(self):
-        tags = super().__sklearn_tags__() #type:ignore
-        # Tells check_estimator that this transformer expects string/categorical inputs
-        tags.input_tags.string = True
-        tags.input_tags.categorical = True
-        return tags
     
-    def fit(self, X, y = None):
-        """Basic validation, for API convention."""
-        X = validate_data(self, X, accept_sparse=False, dtype=None)
-        return self
-
-    def partial_fit(self, X, y=None, **kwargs):
-        """Allows compatibility with skpartial by calling fit on incoming batches."""
-        return self.fit(X, y)
-
-    def transform(self, X):
-        """From a date column parse month and day columns"""
-        X = validate_data(self, X, accept_sparse=False, reset=False, dtype=None)
-        check_is_fitted(self)
-        extracted = []
-        for col in range(X.shape[1]):
-            dt_series = pd.to_datetime(pd.Series(X[:, col]), errors='coerce')
-
-            # Extract month and day, filling invalid/missing parses with 0
-            extracted.append(dt_series.dt.month.fillna(0).to_numpy())
-            extracted.append(dt_series.dt.day.fillna(0).to_numpy())
-
-            return np.column_stack(extracted)
-
-    def get_feature_names_out(self, input_features=None):
-        check_is_fitted(self)
-        if input_features is None:
-          # Fallback default if input_features aren't provided
-          return np.array(['month', 'day'], dtype=object)
-
-        feature_names = []
-        for feature in input_features:
-          feature_names.append(f'{feature}_month')
-          feature_names.append(f'{feature}_day')
-        return np.array(feature_names, dtype=object)
-
-class YearCycle(TransformerMixin, BaseEstimator):
+class DateParsing(TransformerMixin, BaseEstimator):
+    """Combined transformer for month/year cycle transformations. Combining is necessary to avoid progressive datetime calls muddling the columns."""
     def __init__(self) -> None:
         super().__init__()
 
-    def __sklearn_tags__(self):
-        tags = super().__sklearn_tags__() #type:ignore
-        # Tells check_estimator that this transformer expects string/categorical inputs
-        tags.input_tags.string = True
-        tags.input_tags.categorical = True
-        return tags
-
-    def fit(self, X, y = None):
-        """Basic validation, for API convention."""
+    def fit(self, X, y=None):
         X = validate_data(self, X, accept_sparse=False, dtype=None)
         return self
 
     def partial_fit(self, X, y=None, **kwargs):
-        """Allows compatibility with skpartial by calling fit on incoming batches."""
         return self.fit(X, y)
 
     def transform(self, X):
-        """From a date column produce the Sine and CoSine position of the month in the year."""
         X = validate_data(self, X, accept_sparse=False, reset=False, dtype=None)
         check_is_fitted(self)
         extracted = []
         for col in range(X.shape[1]):
-            dt_series = pd.to_datetime(pd.Series(X[:, col]), errors='coerce')
-            extracted.append(np.sin(2 * np.pi * dt_series.dt.month / 12))
-            extracted.append(np.cos(2 * np.pi * dt_series.dt.month / 12))
+            dt_series = pd.to_datetime(pd.Series(X[:, col].ravel()), errors='coerce')
+            
+            # Extract month and day safely filled with 1 (valid date fallback)
+            m = dt_series.dt.month.fillna(1)
+            d = dt_series.dt.day.fillna(1)
+
+            # Cyclical calculations strictly bounded in [0, 1]
+            extracted.append(((1 + np.sin(2 * np.pi * m / 12)) / 2).to_numpy()) #type:ignore Pylance Error
+            extracted.append(((1 + np.cos(2 * np.pi * m / 12)) / 2).to_numpy()) #type:ignore Pylance Error
+            extracted.append(((1 + np.sin(2 * np.pi * d / 31)) / 2).to_numpy()) #type:ignore Pylance Error
+            extracted.append(((1 + np.cos(2 * np.pi * d / 31)) / 2).to_numpy()) #type:ignore Pylance Error
+
         return np.column_stack(extracted)
 
     def get_feature_names_out(self, input_features=None):
         check_is_fitted(self)
         if input_features is None:
-          # Fallback default if input_features aren't provided
-          return np.array(['monthSin', 'monthCos'], dtype=object)
+            return np.array(['monthSin', 'monthCos', 'daySin', 'dayCos'], dtype=object)
 
         feature_names = []
         for feature in input_features:
-          feature_names.append(f'{feature}_monthSin')
-          feature_names.append(f'{feature}_monthCos')
+            feature_names.extend([
+                f'{feature}_monthSin', f'{feature}_monthCos',
+                f'{feature}_daySin', f'{feature}_dayCos'
+            ])
         return np.array(feature_names, dtype=object)
+# class DateParsing(TransformerMixin, BaseEstimator):
+#     def __init__(self) -> None:
+#         super().__init__()
 
-class MonthCycle(TransformerMixin, BaseEstimator):
-    def __init__(self) -> None:
-        super().__init__()
+#     def __sklearn_tags__(self):
+#         tags = super().__sklearn_tags__() #type:ignore
+#         # Tells check_estimator that this transformer expects string/categorical inputs
+#         tags.input_tags.string = True
+#         tags.input_tags.categorical = True
+#         return tags
+    
+#     def fit(self, X, y = None):
+#         """Basic validation, for API convention."""
+#         X = validate_data(self, X, accept_sparse=False, dtype=None)
+#         return self
 
-    def fit(self, X, y = None):
-        """Basic validation, for API convention."""
-        X = validate_data(self, X, accept_sparse=False, dtype=None)
-        return self
+#     def partial_fit(self, X, y=None, **kwargs):
+#         """Allows compatibility with skpartial by calling fit on incoming batches."""
+#         return self.fit(X, y)
 
-    def partial_fit(self, X, y=None, **kwargs):
-        """Allows compatibility with skpartial by calling fit on incoming batches."""
-        return self.fit(X, y)
+#     def transform(self, X):
+#         """From a date column parse month and day columns"""
+#         X = validate_data(self, X, accept_sparse=False, reset=False, dtype=None)
+#         check_is_fitted(self)
+#         extracted = []
+#         for col in range(X.shape[1]):
+#             dt_series = pd.to_datetime(pd.Series(X[:, col]), errors='coerce')
 
-    def transform(self, X):
-        """From a date column produce the Sine and CoSine position of the day in the month."""
-        X = validate_data(self, X, accept_sparse=False, reset=False, dtype=None)
-        check_is_fitted(self)
-        extracted = []
-        for col in range(X.shape[1]):
-            dt_series = pd.to_datetime(pd.Series(X[:, col]), errors='coerce')
-            extracted.append(np.sin(2 * np.pi * dt_series.dt.day / 31))
-            extracted.append(np.cos(2 * np.pi * dt_series.dt.day / 31))
-        return np.column_stack(extracted)
+#             # Extract month and day, filling invalid/missing parses with 0
+#             extracted.append(dt_series.dt.month.fillna(0).to_numpy())
+#             extracted.append(dt_series.dt.day.fillna(0).to_numpy())
 
-    def get_feature_names_out(self, input_features=None):
-        check_is_fitted(self)
-        if input_features is None:
-          # Fallback default if input_features aren't provided
-          return np.array(['daySin', 'dayCos'], dtype=object)
+#             return np.column_stack(extracted)
 
-        feature_names = []
-        for feature in input_features:
-          feature_names.append(f'{feature}_daySin')
-          feature_names.append(f'{feature}_dayCos')
-        return np.array(feature_names, dtype=object)
+#     def get_feature_names_out(self, input_features=None):
+#         check_is_fitted(self)
+#         if input_features is None:
+#           # Fallback default if input_features aren't provided
+#           return np.array(['month', 'day'], dtype=object)
+
+#         feature_names = []
+#         for feature in input_features:
+#           feature_names.append(f'{feature}_month')
+#           feature_names.append(f'{feature}_day')
+#         return np.array(feature_names, dtype=object)
+
+# class YearCycle(TransformerMixin, BaseEstimator):
+#     def __init__(self) -> None:
+#         super().__init__()
+
+#     def __sklearn_tags__(self):
+#         tags = super().__sklearn_tags__() #type:ignore
+#         # Tells check_estimator that this transformer expects string/categorical inputs
+#         tags.input_tags.string = True
+#         tags.input_tags.categorical = True
+#         return tags
+
+#     def fit(self, X, y = None):
+#         """Basic validation, for API convention."""
+#         X = validate_data(self, X, accept_sparse=False, dtype=None)
+#         return self
+
+#     def partial_fit(self, X, y=None, **kwargs):
+#         """Allows compatibility with skpartial by calling fit on incoming batches."""
+#         return self.fit(X, y)
+
+#     def transform(self, X):
+#         """From a date column produce the Sine and CoSine position of the month in the year. Shifted to a 0-1 range. """
+#         X = validate_data(self, X, accept_sparse=False, reset=False, dtype=None)
+#         check_is_fitted(self)
+#         extracted = []
+#         for col in range(X.shape[1]):
+#             dt_series = pd.to_datetime(pd.Series(X[:, col]), errors='coerce')
+#             extracted.append((1 + np.cos(2 * np.pi * dt_series.dt.month / 12)) / 2)
+#             extracted.append((1 + np.sin(2 * np.pi * dt_series.dt.month / 12)) / 2)
+#         return np.column_stack(extracted)
+
+#     def get_feature_names_out(self, input_features=None):
+#         check_is_fitted(self)
+#         if input_features is None:
+#           # Fallback default if input_features aren't provided
+#           return np.array(['monthSin', 'monthCos'], dtype=object)
+
+#         feature_names = []
+#         for feature in input_features:
+#           feature_names.append(f'{feature}_monthSin')
+#           feature_names.append(f'{feature}_monthCos')
+#         return np.array(feature_names, dtype=object)
+
+# class MonthCycle(TransformerMixin, BaseEstimator):
+#     def __init__(self) -> None:
+#         super().__init__()
+
+#     def fit(self, X, y = None):
+#         """Basic validation, for API convention."""
+#         X = validate_data(self, X, accept_sparse=False, dtype=None)
+#         return self
+
+#     def partial_fit(self, X, y=None, **kwargs):
+#         """Allows compatibility with skpartial by calling fit on incoming batches."""
+#         return self.fit(X, y)
+
+#     def transform(self, X):
+#         """From a date column produce the Sine and CoSine position of the day in the month. Shifted to a 0-1 range. """
+#         X = validate_data(self, X, accept_sparse=False, reset=False, dtype=None)
+#         check_is_fitted(self)
+#         extracted = []
+#         for col in range(X.shape[1]):
+#             dt_series = pd.to_datetime(pd.Series(X[:, col]), errors='coerce')
+#             extracted.append((1 + np.sin(2 * np.pi * dt_series.dt.day / 31)) / 2)
+#             extracted.append((1 + np.cos(2 * np.pi * dt_series.dt.day / 31)) / 2)
+#         return np.column_stack(extracted)
+
+#     def get_feature_names_out(self, input_features=None):
+#         check_is_fitted(self)
+#         if input_features is None:
+#           # Fallback default if input_features aren't provided
+#           return np.array(['daySin', 'dayCos'], dtype=object)
+
+#         feature_names = []
+#         for feature in input_features:
+#           feature_names.append(f'{feature}_daySin')
+#           feature_names.append(f'{feature}_dayCos')
+#         return np.array(feature_names, dtype=object)
 
 class Log1pTransformer(TransformerMixin, BaseEstimator):
     def __init__(self) -> None:
@@ -268,8 +274,8 @@ if __name__ == '__main__':
         # FactorizeLabels(), 
         CurrencyBasics(), 
         DateParsing(),
-        YearCycle(),
-        MonthCycle(),
+        # YearCycle(),
+        # MonthCycle(),
         Log1pTransformer(),
         ]
     for estimator in my_estimators:

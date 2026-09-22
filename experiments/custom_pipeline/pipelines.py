@@ -5,8 +5,8 @@ Contains a wrapper of FunctionTransformer with partial_fit(), satisfying Partial
 #Basics
 import numpy as np
 #Transformers
-from .custom_transformers import CurrencyBasics, DateParsing, YearCycle, MonthCycle, Log1pTransformer
-from sklearn.preprocessing import StandardScaler, FunctionTransformer
+from .custom_transformers import CurrencyBasics, DateParsing, Log1pTransformer #, YearCycle, MonthCycle,
+from sklearn.preprocessing import StandardScaler, FunctionTransformer, MinMaxScaler
 from sklearn.feature_extraction.text import HashingVectorizer
 #Pipelines
 # from sklearn.compose import ColumnTransformer
@@ -23,14 +23,21 @@ class PartialFunctionTransformer(FunctionTransformer):
     
 date_pipeline = PartialPipeline([
     ('parsing', DateParsing()),
-    ('month_in_year', YearCycle()),
-    ('day_in_month', MonthCycle())
+    # ('month_in_year', YearCycle()),
+    # ('day_in_month', MonthCycle())
 ])
 
 currency_pipeline = PartialPipeline([
     ('basics', CurrencyBasics()),
     ('log1p', Log1pTransformer()),
     ('standard_normalization', StandardScaler())
+])
+
+naive_bayes_currency_pipeline = PartialPipeline([
+    ('basics', CurrencyBasics()),
+    ('log1p', Log1pTransformer()), #This should help with the heavy tail
+    ('min_max_norm', MinMaxScaler()) #This will probably be sensitive to the heavy tail of financial transactions
+    # ('standard_normalization', StandardScaler() ##Trying an experiment where I minimize the heavy tail, but don't attempt to scale it away.
 ])
 #I could try adding Incremental PCA here as it has a .partial_fit() method
 #One thing I'm worried about there is that currently unused tokens will be eliminated in initial training
@@ -39,14 +46,10 @@ pos_pipeline = PartialPipeline([
     ('hash_POS_ID', HashingVectorizer(
         analyzer='char_wb',
         ngram_range=(5,6),
-        n_features = 2**14 #Gemini: You should set n_features between 2**14 (16,384) and 2**18 (262,144) based on the size of your overall dataset.
+        n_features = 2**14, #Gemini: You should set n_features between 2**14 (16,384) and 2**18 (262,144) based on the size of your overall dataset.,
+        alternate_sign=False
     ))
 ])
-
-# #this pipeline's memory contains the original budget categories
-# label_pipeline = PartialPipeline([
-#     ('factorize', FactorizeLabels())
-# ])
 
 # categorical_pipeline
 #Column groups
@@ -64,7 +67,13 @@ preprocessor = PartialColumnTransformer(
         ('POS', pos_pipeline, POS),
         # ('lables', label_pipeline, LABELS)
     ],
-    # verbose=True,
-    # verbose_feature_names_out=True
 )
 
+naive_bayes_preprocessor = PartialColumnTransformer(
+    transformers=[
+        ('date', date_pipeline, DATE),
+        ('currency', naive_bayes_currency_pipeline, CURRENCY),
+        ('POS', pos_pipeline, POS),
+        # ('lables', label_pipeline, LABELS)
+    ],
+)

@@ -36,118 +36,106 @@ def get_mean_var(array:np.typing.NDArray, num_batches:int, num_tests:int):
     vars = grid.var(axis=0, ddof=1)
     return means, vars
 
-def dmtest(model_1_loss:np.typing.NDArray, model_2_loss:np.typing.NDArray, num_batches:int, num_tests:int, h:int=1):
-    """Function to calculate the Diebold-Mariano test statistic (1995). Based on a MATLAB Implementation at: https://www.mathworks.com/matlabcentral/fileexchange/33979-diebold-mariano-test-statistic/files/dmtest.m
-    From the original:
-    Retrieves the Diebold-Mariano test statistic (1995) for the equality of forecast accuracy of two forecasts under general assumptions.
+# def dmtest(model_1_loss:np.typing.NDArray, model_2_loss:np.typing.NDArray, num_batches:int, num_tests:int, h:int=1):
+#     """Function to calculate the Diebold-Mariano test statistic (1995). Based on a MATLAB Implementation at: https://www.mathworks.com/matlabcentral/fileexchange/33979-diebold-mariano-test-statistic/files/dmtest.m"""
 
-   DM = dmtest(e1, e2, ...) calculates the D-M test statistic on the base of the loss differential which is defined as the difference of the squared forecast errors.
+#     e1_arr = np.asarray(model_1_loss, dtype=np.float64).ravel()
+#     e2_arr = np.asarray(model_2_loss, dtype=np.float64).ravel()
+#     assert e1_arr.size == e2_arr.size, f"Size of e1 ({e1_arr.size} does not equal the size of e2 ({e2_arr.size}))"
 
-   In particular, with the DM statistic one can test the null hypothesis: 
-   H0: E(d) = 0. The Diebold-Mariano test assumes that the loss 
-   differential process 'd' is stationary and defines the statistic as:
-   DM = mean(d) / sqrt[ (1/T) * VAR(d) ]  ~ N(0,1),
-   where VAR(d) is an estimate of the unconditional variance of 'd'.
+#     #Define the loss differential
+#     d = e1_arr - e2_arr
 
-   This function also corrects for the autocorrelation that multi-period 
-   forecast errors usually exhibit. Note that an efficient h-period 
-   forecast will have forecast errors following MA(h-1) processes. 
-   Diebold-Mariano use a Newey-West type estimator for sample variance of
-   the loss differential to account for this concern.
+#     print(f"\nLength d: {len(d)}")
 
-   'e1' is a 'T1-by-1' vector of the forecast errors from the first model
-   'e2' is a 'T2-by-1' vector of the forecast errors from the second model
+#     #Initialize n
+#     n = int(e1_arr.size)
 
-   It should hold that T1 = T2 = T.
+#     d_mean = np.mean(d)
 
-   DM = DMTEST(e1, e2, 'h') allows you to specify an additional parameter 
-   value 'h' to account for the autocorrelation in the loss differential 
-   for multi-period ahead forecasts.   
-       'h'         the forecast horizon, initially set equal to 1
+#     gamma_0 = d.var(ddof=1) + 1e-10
+#     if h > 1:
+#         gamma = np.zeros(h-1, dtype=np.float64)
+#         for i in range(1,h):
+#             gamma[i-1] = np.dot(d[i:n], d[0:n-i]) / n
+#         var_d = gamma_0 + 2 * gamma.sum()
+#     else:
+#         var_d = gamma_0
+#     var_d = max(0.0, float(var_d))
+#     return d_mean, float(np.sqrt((1/n)*var_d))
+import numpy as np
+from scipy import stats
 
-   DM = DMTEST(...) returns a constant:
-       'DM'      the Diebold-Mariano (1995) test statistic
-
-  Semin Ibisevic (2011)
-  $Date: 11/29/2011 $
+def dmtest(e1: np.ndarray, e2: np.ndarray, h: int = 1):
     """
-    e1_arr = np.asarray(model_1_loss, dtype=np.float64).ravel()
-    e2_arr = np.asarray(model_2_loss, dtype=np.float64).ravel()
-    assert e1_arr.size == e2_arr.size, f"Size of e1 ({e1_arr.size} does not equal the size of e2 ({e2_arr.size}))"
-
-    #Define the loss differential
-    d = e1_arr - e2_arr
-    # d_means, d_vars = get_mean_var(array=d, num_batches=num_batches, num_tests=num_tests)
-    # d_star = d_means / (d_vars + 5e-10)
-    # #Initialize T
-    T = int(e1_arr.size / num_tests)
-    # #Recalculate the variance of the loss differential, taking into account autocorrelation
-    # max_lags = max(0, h-1) 
-    # X = np.ones_like(d_star)
-
-    # ols_result = sm.OLS(d_star, X).fit(cov_type='HAC', cov_kwds={'maxlags':max_lags})
-
-    # d_star_mean = float(np.mean(d_star))
-    # hac_std_error = float(ols_result.bse.item())
-    # return d_star_mean, hac_std_error
-    d_mean = np.mean(d)
-
-    gamma_0 = d.var(ddof=1)
+    Diebold-Mariano test adapted for M independent test runs of length T.
+    
+    e1, e2 : ndarray of shape (num_tests, horizon) e.g., (100, 5)
+    h      : forecast horizon (lags to adjust = h - 1)
+    """
+    e1_arr = np.asarray(e1, dtype=np.float64)
+    e2_arr = np.asarray(e2, dtype=np.float64)
+    
+    # Ensure 2D shape: (M trials, T horizon)
+    if e1_arr.ndim == 1:
+        raise ValueError("Reshape error inputs to (num_tests, forecast_horizon)")
+        
+    d = e1_arr - e2_arr  # Shape: (M, T)
+    M, T = d.shape
+    N = M * T  # Total pooled sample size
+    
+    d_flat = d.ravel()
+    d_mean = np.mean(d_flat)
+    
+    # Variance at lag 0 across all pooled data
+    gamma_0 = np.var(d_flat, ddof=1)
+    
+    # Calculate autocovariances ONLY within individual test runs (no cross-trial bleeding)
+    gamma_sum = 0.0
     if h > 1:
-        gamma = np.zeros(h-1, dtype=np.float64)
-        for i in range(1,h):
-            gamma[i-1] = np.dot(d[i:T], d[0:T-i]) / T
-        var_d = gamma_0 + 2 * gamma.sum()
-    else:
-        var_d = gamma_0
-    var_d = max(0.0, float(var_d))
-    return d_mean, float(np.sqrt((1/T)*var_d))
+        for k in range(1, min(h, T)):
+            # Sum inner products strictly within each trial row
+            lag_cov = np.sum((d[:, k:] - d_mean) * (d[:, :-k] - d_mean)) / N
+            # Applying uniform Bartlett weight (or standard DM unweighted lag sum)
+            gamma_sum += lag_cov
 
-def compute_Diebold_Mariano_ttest(model_1_loss:np.ndarray[Any], model_2_loss:np.ndarray[Any], num_tests:int, num_batches:int,  h:int=1):
-    """Computes right-tailed paired stats.t-test with corrected variance.
-
-    Parameters
-    ----------
-    differences : array-like of shape (n_samples,)
-        Vector containing the differences in the score metrics of two models.
-    df : int
-        Degrees of freedom.
-    n_train : int
-        Number of samples in the training set.
-    n_test : int
-        Number of samples in the testing set.
-
-    Returns
-    -------
-    t_stat : float
-        Variance-corrected stats.t-statistic.
-    p_val : float
-        Variance-corrected p-value.
-    """
-    #these should be fed in as a vector, not as a scaler
-    mean, std = dmtest(model_1_loss=model_1_loss, model_2_loss=model_2_loss, h=h, num_tests=num_tests, num_batches=num_batches)
-    if std == 0 or np.isnan(std):
-        print(f"std is 0 or NaN for pair")
-        t_stat = 0.0
-    else:
-        t_stat = mean / std
-    p_val = stats.t.sf(np.abs(t_stat), num_batches)  # right-tailed stats.t-test
-    return t_stat, p_val
+    var_d = gamma_0 + 2 * gamma_sum
+    var_d = max(1e-12, float(var_d))
+    
+    # Standard error of the mean differential
+    se_d = np.sqrt(var_d / N)
+    return d_mean, se_d
+    DM_stat = d_mean / se_d
+    p_val = 2 * stats.norm.sf(np.abs(DM_stat))  # Two-tailed standard normal p-value
+    
+    return DM_stat, p_val
 
 #need to change the scores to loss
 def pairwise_freq(model_scores:pd.DataFrame, pairwise_comp_df:pd.DataFrame | None, num_batches:int, num_tests:int):
     """Null Hypothesis: The two models have equal predictive accuracy"""
-    #I need to 
     num_models = len(model_scores)
     n_comparisons = factorial(num_models) / (
         factorial(2) * factorial(num_models - 2)
     )
     pairwise_t_test = []
     for model_i, model_k in combinations(range(num_models), 2):
-        
-        model_i_error = (1 - model_scores.iloc[model_i].to_numpy()) ** 2
-        model_k_error = (1 - model_scores.iloc[model_k].to_numpy()) ** 2
-        t_stat, p_val = compute_Diebold_Mariano_ttest(model_i_error, model_k_error, num_batches=num_batches, num_tests=num_tests)
+        scores_i = model_scores.iloc[model_i].to_numpy()
+        scores_i = scores_i.reshape(num_batches, num_tests)
+        scores_k = model_scores.iloc[model_k].to_numpy()
+        scores_k = scores_k.reshape(num_batches, num_tests)
+        model_i_error = (1 - scores_i) ** 2
+        model_k_error = (1 - scores_k) ** 2
+        h = int(round(((num_tests ** (1/3)) + 1), 0))
+        mean, std = dmtest(e1=model_i_error, e2=model_k_error, h=h)#, num_tests=num_tests, num_batches=num_batches)
+
+        if std == 0 or np.isnan(std):
+            print(f"std is 0 or NaN for pair {model_scores.index[model_i]} and {model_scores.index[model_k]}")
+            t_stat = 0.0
+        else:
+            t_stat = mean / std
+
+        # p_val = stats.t.sf(np.abs(t_stat), num_batches)  # right-tailed stats.t-test
+        p_val = 2 * stats.norm.sf(np.abs(t_stat))
         p_val *= n_comparisons  # implement Bonferroni correction
         # Bonferroni can output p-values higher than 1
         p_val = 1 if p_val > 1 else p_val
@@ -174,12 +162,17 @@ def pairwise_freq(model_scores:pd.DataFrame, pairwise_comp_df:pd.DataFrame | Non
 def pairwise_bayesian(model_scores:pd.DataFrame, rope_interval:list, num_batches:int, num_tests:int, h:int, pairwise_comp_df:pd.DataFrame | None):
     """Probability that Model A is Worse, Better, or the same (over the ROPE) as model B"""
     pairwise_bayesian = []
-    # model_scores = model_scores.T
+
     num_models = len(model_scores)
     for model_i, model_k in combinations(range(num_models), 2):
-        model_i_error = (1 - model_scores.iloc[model_i].to_numpy()) ** 2
-        model_k_error = (1 - model_scores.iloc[model_k].to_numpy()) ** 2
-        mean, std = dmtest(model_1_loss=model_i_error, model_2_loss=model_k_error, h=h, num_batches=num_batches, num_tests=num_tests)
+        scores_i = model_scores.iloc[model_i].to_numpy()
+        scores_i = scores_i.reshape(num_batches, num_tests)
+        scores_k = model_scores.iloc[model_k].to_numpy()
+        scores_k = scores_k.reshape(num_batches, num_tests)
+        model_i_error = (1 - scores_i) ** 2
+        model_k_error = (1 - scores_k) ** 2
+        h = int(round(((num_tests ** (1/3)) + 1), 0))
+        mean, std = dmtest(e1=model_i_error, e2=model_k_error, h=h)
         #Protect against 0 division errors, which could occur if the error is equal
         if std == 0 or np.isnan(std):
             print(f"std is 0 or NaN for pair {model_scores.index[model_i]} and {model_scores.index[model_k]}")
@@ -192,6 +185,7 @@ def pairwise_bayesian(model_scores:pd.DataFrame, rope_interval:list, num_batches
             better_prob = t_post.cdf(rope_interval[0])
             worse_prob = 1 - t_post.cdf(rope_interval[1])
             rope_prob = t_post.cdf(rope_interval[1]) - t_post.cdf(rope_interval[0])
+
         if pairwise_comp_df is None:
             pairwise_bayesian.append([model_scores.index[model_i], model_scores.index[model_k], worse_prob, better_prob, rope_prob])
         else:
