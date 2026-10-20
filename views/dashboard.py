@@ -6,7 +6,7 @@ add_new = st.Page("views/add_new_purchases.py", title="Add Transactions")
 
 user = st.session_state.user
 
-st.header("Dashboad")
+st.header("Dashboard")
 st.markdown(f"""
 Welcome {user.username}
 In the dashboard you can see charts related to your spending.
